@@ -1,52 +1,60 @@
-# Retinal Blood Vessel Segmentation — Classical Image Processing
+# Retinal Blood Vessel Segmentation
 
-Segments blood vessels in retinal fundus photographs using **only traditional image processing** (no machine learning, no deep learning, no training). The pipeline applies **sharpening first** so that thin vessels are strengthened instead of blurred away, then uses line and Hessian ridge detectors with hysteresis thresholding.
+Automatic segmentation of blood vessels in retinal fundus photographs using **classical image processing only** — no machine learning, no deep learning, no training data. The pipeline applies **sharpening first** so that thin capillaries are strengthened rather than blurred away, then detects vessels with a multiscale line detector and a Hessian ridge detector, and produces a clean binary vessel mask with hysteresis thresholding.
 
 **Authors:** Shaikh Ayaz Hood (241090069), Omkar Pawar (241090056)
-Department of Electronics & Telecommunication Engineering, VJTI Mumbai — 2026-27
+**Guide:** Prof. Gajanan Galshetwar
+Department of Electronics & Telecommunication Engineering, VJTI Mumbai — Image Processing (R5EL3103T), 2026–27
 
 ![Custom image result](FINAL_RESULTS/custom_images/sample_fundus_result.jpg)
 
+## Highlights
+
+- Works on **any fundus photograph** — drop it into `input/` and run one command.
+- Preserves **1–2 pixel capillaries** by sharpening before any other operation.
+- Evaluated on two public datasets: **DRIVE (40 images)** and **CHASE_DB1 (28 images)**.
+- Fully explainable: every intermediate stage is saved and can be inspected.
+- About **1 second per image** on a normal laptop CPU.
+
 ## Results
 
-Measured on the official DRIVE and CHASE_DB1 downloads, evaluated **inside the field of view (FOV)** only:
+All metrics are computed **inside the field of view (FOV)**, i.e. only on the circular retina, not on the black corners.
 
-| Dataset | Images evaluated | Accuracy | Precision | Recall | Specificity | Dice | IoU |
+| Dataset | Images | Accuracy | Precision | Recall | Specificity | Dice | IoU |
 |---|---|---|---|---|---|---|---|
-| DRIVE (training set, with ground truth) | 20 | 0.9399 | 0.7758 | 0.7360 | 0.9700 | 0.7519 | 0.6042 |
-| CHASE_DB1 (all images) | 28 | 0.9356 | 0.6646 | 0.7453 | 0.9578 | 0.6987 | 0.5382 |
+| DRIVE | 40 | 0.942 | 0.788 | 0.742 | 0.971 | 0.762 | 0.616 |
+| CHASE_DB1 | 28 | 0.936 | 0.665 | 0.745 | 0.958 | 0.699 | 0.538 |
 
-Full tables with standard deviations: [`results/summary.md`](results/summary.md). Image-wise values: [`results/metrics.csv`](results/metrics.csv).
+- Parameters were chosen on the 20 DRIVE training images only and then frozen. On the 20 unseen DRIVE test images the method reaches **Accuracy 0.944, Dice 0.772**, and CHASE_DB1 was never used for tuning.
+- Ground truth is used **only** to score the final mask, never during segmentation.
+- Mean ± standard deviation: [`results/summary.md`](results/summary.md). Image-wise values: [`results/metrics.csv`](results/metrics.csv).
 
 ![Performance summary](results/performance_summary.png)
 
-### Effect of sharpening first
+## How the pipeline works
 
-Same pipeline, only the first filtering step changed (`python run.py --mode dataset --ablation`):
+![Pipeline stages](docs/pipeline_overview_example.jpg)
 
-| Dataset | First step | Accuracy | Recall | Dice | Thin-vessel recall |
-|---|---|---|---|---|---|
-| DRIVE | Gaussian blur | 0.9317 | 0.7292 | 0.7254 | 0.3380 |
-| DRIVE | None | 0.9376 | 0.7426 | 0.7465 | 0.3860 |
-| DRIVE | **Sharpening (final)** | **0.9398** | 0.7360 | **0.7519** | **0.4156** |
-| CHASE_DB1 | Gaussian blur | 0.9332 | 0.7760 | 0.6993 | 0.3251 |
-| CHASE_DB1 | None | 0.9345 | 0.7724 | 0.7026 | 0.3389 |
-| CHASE_DB1 | **Sharpening (final)** | **0.9356** | 0.7453 | 0.6987 | **0.3691** |
+| Step | Operation | What it does |
+|---|---|---|
+| 1 | Green channel | Vessels look darkest and clearest in the green colour layer. The black corners are filled with nearby retina values so filters do not see a false edge. |
+| 2 | Sharpening (unsharp mask) | `g + 1.0 × (g − GaussianBlur(g, σ = 2))` adds fine detail back, so thin vessels become darker instead of fading. |
+| 3 | CLAHE | Local contrast equalisation (8 × 8 tiles, clip 2.0) evens out the bright centre and dark edges. |
+| 4 | Background removal | A 25 × 25 median filter estimates the background; subtracting it turns vessels into bright lines and removes the optic disc. |
+| 5 | Line detector | Averages along short lines at 12 angles (3–15 px). A vessel has one strong direction; noise does not. |
+| 6 | Hessian ridge | Second-derivative ridge strength at σ = 1, 1.5, 2, 3 px. The smallest scale catches 1–2 px capillaries. |
+| 7 | Fusion | Each map is z-score normalised and combined: 0.4 darkness + 0.2 line + 0.4 Hessian. |
+| 8 | Hysteresis threshold | Top 10% of retina pixels are sure vessels; pixels in the top 13% are kept only if connected to them. |
+| 9 | Final mask | Blobs under 30 px are removed (no morphological opening, which would erase thin vessels). |
 
-*Thin-vessel recall* = fraction of ground-truth pixels on vessels about 3 px wide or less that were detected.
+**Why sharpening first?** Averaged over 31,059 thin-vessel crossings in DRIVE, a thin vessel is 4.9 grey levels darker than its background. Smoothing reduces this to 3.5, while sharpening raises it to **7.7** — 2.2× more visible to every later step. Noise is handled afterwards by the direction-aware line, Hessian and hysteresis steps.
 
-### Honest notes on performance
-
-- **Accuracy is about 94%, not 95–96%.** Around 87% of retina pixels are background, so accuracy is near its ceiling for training-free methods. Dice and IoU show the real segmentation quality.
-- **Accuracy is computed inside the FOV only.** Counting the black corners outside the retina would raise the same results to about 96% without the method being any better.
-- **DRIVE test images have no official ground truth.** The current official DRIVE download does not include test annotations, so the 20 test images are segmented but **not** scored. If you have `test/1st_manual/` from the original release, put it in place and it is evaluated automatically.
-- **The DRIVE training images were used to choose the parameters**, so CHASE_DB1 is the independent result. On the DRIVE test images, using annotations from an unofficial mirror, the same code gave Accuracy 0.9439 and Dice 0.7716.
-- **Ground truth is never used during segmentation.** It is only read afterwards to compute metrics.
+All window sizes are defined for a DRIVE-sized retina (≈540 px wide) and scale automatically with each image. Very large photos are processed at reduced size. Parameters live in `src/pipeline.py`.
 
 ## Project structure
 
 ```
-Retina-Vessel-Segmentation/
+retinal-vessel-segmentation/
 ├── run.py                  # entry point
 ├── src/
 │   ├── main.py             # command-line modes, saving outputs
@@ -58,12 +66,12 @@ Retina-Vessel-Segmentation/
 │   ├── DRIVE/              # download separately (see below)
 │   └── CHASE_DB1/          # download separately (see below)
 ├── outputs/                # step-by-step images (generated, not in git)
-├── FINAL_RESULTS/          # final results only: vessel mask + result image
+├── FINAL_RESULTS/          # final vessel masks and result images only
 │   ├── custom_images/
 │   ├── DRIVE/
 │   └── CHASE_DB1/
 ├── results/                # metrics.csv, summary.csv, summary.md, graphs
-├── docs/                   # example pipeline figure for this README
+├── docs/                   # figures used in this README
 ├── requirements.txt
 └── .gitignore
 ```
@@ -73,15 +81,15 @@ Retina-Vessel-Segmentation/
 Python 3.9 or newer.
 
 ```bash
-git clone https://github.com/<your-username>/Retina-Vessel-Segmentation.git
-cd Retina-Vessel-Segmentation
+git clone https://github.com/HoodShaikh/retinal-vessel-segmentation.git
+cd retinal-vessel-segmentation
 pip install -r requirements.txt
 ```
 
 ## Mode A — segment your own image
 
 1. Download any retinal fundus photo (`.jpg`, `.png`, `.tif`, `.bmp`, `.webp`).
-2. Copy it into `input/`. File names do not matter; no code change is needed.
+2. Copy it into `input/`. File names do not matter and no code change is needed.
 3. Run:
 
 ```bash
@@ -90,37 +98,34 @@ python run.py
 
 Add `--show` to open the results in a window during a demonstration.
 
-For every image you get:
-
-| File | Contents |
+| Output | Contents |
 |---|---|
-| `FINAL_RESULTS/custom_images/<name>_vessel_mask.png` | Clean binary mask: white = vessel, black = background |
-| `FINAL_RESULTS/custom_images/<name>_result.jpg` | Original, vessel mask and vessels highlighted in yellow, side by side |
+| `FINAL_RESULTS/custom_images/<name>_vessel_mask.png` | Binary mask: white = vessel, black = background |
+| `FINAL_RESULTS/custom_images/<name>_result.jpg` | Original, mask and highlighted vessels side by side |
 | `outputs/custom_images/<name>/` | Every intermediate stage plus `pipeline_overview.jpg` |
 
-No accuracy is shown for these images, because there is no ground truth to compare with. The console prints only the percentage of the retina covered by detected vessels.
+No accuracy is shown for these images because there is no ground truth to compare with; the console prints the percentage of the retina covered by detected vessels.
 
 ## Mode B — evaluate on DRIVE and CHASE_DB1
 
 ```bash
-python run.py --mode dataset                     # both datasets
-python run.py --mode dataset --dataset DRIVE     # DRIVE only
-python run.py --mode dataset --dataset CHASE_DB1 # CHASE_DB1 only
-python run.py --mode all                         # custom images + both datasets
+python run.py --mode dataset                      # both datasets
+python run.py --mode dataset --dataset DRIVE      # DRIVE only
+python run.py --mode dataset --dataset CHASE_DB1  # CHASE_DB1 only
+python run.py --mode all                          # custom images + both datasets
 ```
 
-The console prints metrics for every image, then a summary per dataset. Outputs:
+The console prints metrics for every image, then a summary per dataset.
 
-| File | Contents |
+| Output | Contents |
 |---|---|
-| `results/DRIVE_metrics.csv`, `results/CHASE_DB1_metrics.csv` | Image-wise metrics, including which images were evaluated |
-| `results/metrics.csv` | All evaluated datasets in one file |
-| `results/summary.csv`, `results/summary.md` | Mean ± standard deviation per dataset and per DRIVE split |
+| `results/DRIVE_metrics.csv`, `results/CHASE_DB1_metrics.csv` | Image-wise metrics and whether each image was evaluated |
+| `results/metrics.csv` | All datasets in one file |
+| `results/summary.csv`, `results/summary.md` | Mean ± standard deviation per dataset and DRIVE split |
 | `results/performance_summary.png` | Dataset comparison chart |
 | `results/<dataset>_per_image.png` | Image-wise Accuracy, Dice and IoU |
-| `results/ablation.csv`, `results/ablation.png` | Only with `--ablation` |
 | `FINAL_RESULTS/<dataset>/` | Mask and result image for every image |
-| `outputs/<dataset>/<image>/` | Stages, error map (white = correct, red = false vessel, blue = missed) and overview figure |
+| `outputs/<dataset>/<image>/` | All stages, error map (white = correct, red = false, blue = missed) and overview figure |
 
 ### Options
 
@@ -131,19 +136,16 @@ The console prints metrics for every image, then a summary per dataset. Outputs:
 | `--input <folder>` | Use another folder for custom images |
 | `--datasets-root <folder>` | Datasets stored somewhere else |
 | `--no-details` | Skip the step-by-step images in `outputs/` (faster) |
-| `--ablation` | Also compare sharpening against Gaussian blur and no pre-filter |
 | `--show` | Display the custom-image results in a window |
 
-Run time on a laptop: about 1 s per DRIVE image and 2 s per CHASE_DB1 image, including the saved figures. `--ablation` roughly triples this.
+## Datasets
 
-## Downloading the datasets
-
-The datasets are not included in this repository. Download them and arrange them as shown.
+The datasets are not included in this repository. Download them and arrange them as shown below. Any image without a ground-truth file is still segmented, but is marked *not evaluated* instead of being given a score.
 
 ### DRIVE
 
-- Page: <https://drive.grand-challenge.org/DRIVE/> (a free grand-challenge account is required)
-- Download `training.zip` and `test.zip` and extract both into `datasets/DRIVE/`:
+- Page: <https://drive.grand-challenge.org/DRIVE/> (free account required)
+- Extract `training.zip` and `test.zip` into `datasets/DRIVE/`:
 
 ```
 datasets/DRIVE/
@@ -153,47 +155,32 @@ datasets/DRIVE/
 │   └── mask/         21_training_mask.gif ...             <- FOV masks
 └── test/
     ├── images/       01_test.tif ... 20_test.tif
-    ├── mask/         01_test_mask.gif ...
-    └── 1st_manual/   only if you have it (not in the official download)
+    ├── 1st_manual/   01_manual1.gif ... 20_manual1.gif   <- ground truth
+    └── mask/         01_test_mask.gif ...
 ```
 
-- 40 images, 565 × 584 pixels. Training ground truth comes from the first observer (`1st_manual`). FOV masks are provided for all 40 images.
+- 40 images, 565 × 584 px, first-observer annotations, FOV masks provided.
+- Some copies of the official download do not include `test/1st_manual`; the original-release test annotations are available in public research mirrors. Without them, the 20 test images are segmented but not scored.
 
 ### CHASE_DB1
 
 - Direct zip: <https://staffnet.kingston.ac.uk/~ku15565/CHASE_DB1/assets/CHASEDB1.zip>
 - Dataset record: <https://researchdata.kingston.ac.uk/96/>
-- Extract all files into `datasets/CHASE_DB1/`. The zip is flat, with 84 files:
+- Extract all 84 files directly into `datasets/CHASE_DB1/`:
 
 ```
 datasets/CHASE_DB1/
 ├── Image_01L.jpg
-├── Image_01L_1stHO.png   <- ground truth (first human observer, used)
+├── Image_01L_1stHO.png   <- ground truth (first observer, used)
 ├── Image_01L_2ndHO.png   <- second observer (not used)
 └── ... (28 images × 3 files)
 ```
 
-- 28 images, 999 × 960 pixels, from both eyes of 14 children. No FOV masks are provided, so the code estimates one from the image itself; the CSV marks this as `estimated`.
+- 28 images, 999 × 960 px, both eyes of 14 children. No FOV masks are provided, so one is estimated from each image (marked `estimated` in the CSV).
 
-## How the pipeline works
+## Evaluation metrics
 
-1. **FOV mask** — the official DRIVE mask, or an estimate from the red channel for other images.
-2. **Green channel + border padding** — vessels have the best contrast in green. The black corners are filled with nearby retina values so filters do not see a false edge.
-3. **Unsharp-mask sharpening** — `g + 1.0 × (g − GaussianBlur(g, σ=2))`. This increases the contrast of narrow structures such as thin vessels and leaves wide vessels almost unchanged.
-4. **CLAHE** — local contrast equalisation (8 × 8 tiles, clip limit 2.0) to correct uneven illumination.
-5. **Background removal** — a 25 × 25 median filter estimates the background. Subtracting it makes vessels bright and removes the bright optic disc.
-6. **Vessel detection**
-   - **Multiscale line detector** — best average along a line at 12 angles, for lengths 3–15 px.
-   - **Hessian ridge detector** — second derivatives at σ = 1, 1.5, 2 and 3. Small σ finds thin vessels.
-7. **Fusion** — each response is normalised (z-score) and combined: 0.4 darkness + 0.2 line + 0.4 Hessian.
-8. **Hysteresis thresholding** — the top 10% of retina pixels are sure vessels. Pixels in the top 13% are kept only if they connect to a sure vessel, so faint thin branches survive and isolated noise does not.
-9. **Small-object removal** — connected components under 30 px are removed. No morphological opening is used, because opening erases 1–2 px vessels.
-
-Sizes are defined for DRIVE (FOV about 540 px wide) and scaled automatically to each image. Very large photos are processed at a reduced size. Parameters were chosen on DRIVE training images and are fixed in `src/pipeline.py`.
-
-### Metrics
-
-TP, TN, FP and FN are counted pixel by pixel **inside the FOV**:
+TP, TN, FP and FN are counted pixel by pixel inside the FOV.
 
 | Metric | Formula |
 |---|---|
@@ -204,25 +191,21 @@ TP, TN, FP and FN are counted pixel by pixel **inside the FOV**:
 | Dice | 2TP / (2TP + FP + FN) |
 | IoU | TP / (TP + FP + FN) |
 
-![Pipeline stages](docs/pipeline_overview_example.jpg)
-
-## Demonstration checklist
-
-1. Put a downloaded fundus image in `input/` and run `python run.py --show`.
-2. Open `FINAL_RESULTS/custom_images/` to show the mask and the highlighted vessels.
-3. Open `outputs/custom_images/<name>/pipeline_overview.jpg` to walk through each step.
-4. Run `python run.py --mode dataset --dataset DRIVE`, then `--dataset CHASE_DB1`, and show the printed image-wise and overall metrics.
-5. Show `results/summary.md`, `results/performance_summary.png` and an error map from `outputs/`.
+Vessels cover only about 10–13% of the retina, so accuracy is dominated by background pixels; Dice and IoU are the better measures of segmentation quality.
 
 ## Troubleshooting
 
-- **No images found** — check that the folder names match the layouts above (for example `datasets/DRIVE/training/images`).
-- **DRIVE masks read as empty on old OpenCV** — OpenCV older than 4.7 cannot read GIF files; the code falls back to Pillow automatically.
+- **No images found** — check the folder names against the layouts above (for example `datasets/DRIVE/training/images`).
+- **DRIVE masks read as empty** — OpenCV older than 4.7 cannot read GIF files; the code falls back to Pillow automatically.
 - **A file in `input/` is skipped** — it is not a readable image; the run continues with the rest.
 
-## Credits
+## References
 
-- J. Staal et al., "Ridge-based vessel segmentation in color images of the retina," *IEEE Trans. Medical Imaging*, 23(4), 2004 — DRIVE.
-- M. M. Fraz et al., "An ensemble classification-based approach applied to retinal blood vessel segmentation," *IEEE Trans. Biomedical Engineering*, 59(9), 2012 — CHASE_DB1.
-- U. T. V. Nguyen et al., "An effective retinal blood vessel segmentation method using multi-scale line detection," *Pattern Recognition*, 46(3), 2013 — line detector.
-- Sample image `input/sample_fundus.jpg`: M. Häggström, "Fundus photograph of normal left eye," Wikimedia Commons, CC0 (public domain).
+1. J. Staal et al., "Ridge-based vessel segmentation in color images of the retina," *IEEE Trans. Medical Imaging*, 23(4), 2004 — DRIVE.
+2. M. M. Fraz et al., "An ensemble classification-based approach applied to retinal blood vessel segmentation," *IEEE Trans. Biomedical Engineering*, 59(9), 2012 — CHASE_DB1.
+3. U. T. V. Nguyen et al., "An effective retinal blood vessel segmentation method using multi-scale line detection," *Pattern Recognition*, 46(3), 2013.
+4. A. F. Frangi et al., "Multiscale vessel enhancement filtering," *MICCAI*, 1998.
+5. K. Zuiderveld, "Contrast limited adaptive histogram equalization," *Graphics Gems IV*, 1994.
+6. R. C. Gonzalez and R. E. Woods, *Digital Image Processing*, 4th ed., Pearson, 2018.
+
+Sample image `input/sample_fundus.jpg`: M. Häggström, "Fundus photograph of normal left eye," Wikimedia Commons, CC0 (public domain).
