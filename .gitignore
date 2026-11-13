@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+
+# Datasets are downloaded separately (see README)
+datasets/DRIVE/*
+datasets/CHASE_DB1/*
+!datasets/DRIVE/.gitkeep
+!datasets/CHASE_DB1/.gitkeep
+
+# Step-by-step images are regenerated on every run
+outputs/*
+!outputs/.gitkeep
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
